@@ -14,13 +14,21 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.net.HttpURLConnection;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
@@ -44,8 +52,11 @@ public class MainActivity extends javax.swing.JFrame {
     int xMouse,yMouse;
     String defaultPlaceHolder = "< Enter something >";
     public static final String pythonFile="test.py";
-    public static final String chatBotPy="brain.py";
+    public static final String chatBotPy="brain_new.py";//"brain.py";
     public static final String getReplyPy="getReply.py";
+    public static final String dbFile="database.db";
+    public static final String dbTable="notes";
+    
     
     public static final int defaultMode=0;
     public static final int emailMode=1;
@@ -56,11 +67,14 @@ public class MainActivity extends javax.swing.JFrame {
     public static final String fileDir = "C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot";
     public static final String path = "C:\\Python27";
     
+    public static final String javaFileDir = "C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\personalassistant";
+    public static final String javaFile = "VoiceRecog";
+    
     public static final String weatherAPIKey = "V4cASGCClX7p8Xy51P5olxn3WnaAGfwC";//"UlLAKVh111vc2WanhX1IbRNKOzjB49uK";
     public static final String cityCodeAPI = "http://dataservice.accuweather.com/locations/v1/cities/search?apikey=";//UlLAKVh111vc2WanhX1IbRNKOzjB49uK&q=";
     public static final String weatherAPI = "http://dataservice.accuweather.com/forecasts/v1/daily/1day/";
     public static final String weatherIconURL = "https://developer.accuweather.com/sites/default/files/";
-    
+    public static final String newsAPI = "https://newsapi.org/v2/top-headlines?sources=the-times-of-india&apiKey=df8fd1b73ae8455ab8f21f0ce044c057";
     
     public static final String wikipediaURL = "https://en.wikipedia.org/w/api.php?action=opensearch&search=";//+"narendra+modi"+"&format=json";
     
@@ -72,7 +86,9 @@ public class MainActivity extends javax.swing.JFrame {
     public static final int wikiPanelIndex = 2;
     public static final int emailPanelIndex = 3;
     public static final int reminderPanelIndex = 4;
-    public static final int numberOfPanels = 5;
+    public static final int notesPanelIndex = 5;
+    public static final int newsPanelIndex = 6;
+    public static final int numberOfPanels = 7;
     
     JPanel panels[];
     
@@ -80,8 +96,36 @@ public class MainActivity extends javax.swing.JFrame {
     Process pro;
     BufferedReader br;
     
+    Connection conn = null;
+    PreparedStatement ps = null;
+    ResultSet rs = null;
+    
+    String headlines[];
+    String articles[];
+    String imgURL[];
+    int newIndex=0;
     
     boolean addRecipients=false;
+    boolean isListening=false;
+    FemaleVoice botVoice;
+    VoiceRecog voiceRecog;
+    
+    ServerSocket server;
+    Socket socket;
+    DataOutputStream dos;
+    DataInputStream dis;
+    boolean isSocketConnected;
+    String socketData;
+    /*
+        Thread loader = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                
+            }
+        });
+        loader.start();
+    */
+    
     
     
     /**
@@ -89,10 +133,17 @@ public class MainActivity extends javax.swing.JFrame {
      */
     public MainActivity() {
         initComponents();
+        botVoice = new FemaleVoice();
+        voiceRecog = new VoiceRecog();
+        
+        
+        initSocket();
+        initDB();
         initPython();
         weatherPanel.setBackground( new Color(150, 150, 150, 100) );
         emailPanel.setBackground( new Color(150, 150, 150, 100) );
         reminderPanel.setBackground( new Color(150, 150, 150, 100) );
+        newsPanel.setBackground( new Color(150, 150, 150, 100) );
         txtWikiOutput.setBackground( new Color(150, 150, 150, 255) );
         
         panels=new JPanel[numberOfPanels];
@@ -101,11 +152,106 @@ public class MainActivity extends javax.swing.JFrame {
         panels[wikiPanelIndex] = wikiPanel;
         panels[emailPanelIndex] = emailPanel;
         panels[reminderPanelIndex] = reminderPanel;
+        panels[notesPanelIndex] = notesPanel;
+        panels[newsPanelIndex] = newsPanel;
+        
         setParentPanelTo(blankPanelIndex);
         
         getTime();
     }
+    
+    public void initSocket(){
+        System.out.println("init Socket");
+        Thread socketThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    server = new ServerSocket(5077);
+                    socket = server.accept();
+                    System.out.println("connection established");
+                    isSocketConnected = true;
+                    dos=new DataOutputStream(socket.getOutputStream());
+                    dis=new DataInputStream(socket.getInputStream());
+                    startSocketListener();
+                } catch (Exception e) {
+                    
+                }
+            }
+        });
+        socketThread.start();
+    }
 
+    public void startSocketListener() {
+        Thread listener = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (isSocketConnected) {
+                        String data = dis.readUTF();
+                        System.out.println("date receicved "+data);
+                        sendSocketResponse(data);
+                        Thread.sleep(10);
+                    }
+                }
+                catch (Exception e) {
+                    
+                }
+            }
+        });
+        listener.start();
+    }
+    
+    public void sendSocketResponse(String data) {
+        try {
+            String output = getChatBotResponse(data);
+            System.out.println("data to be sent : "+output);
+            dos.writeUTF(output);
+            dos.flush();
+        }
+        catch (Exception e) {
+            
+        }
+    }
+    
+    public void initDB() {
+        try {
+            Class.forName("org.sqlite.JDBC");
+            conn = DriverManager.getConnection("jdbc:sqlite:"+dbFile);
+            System.out.println("Connection Established");
+            displayTable();
+        }
+        catch (Exception e) {
+            
+        }
+    }
+    
+    public void displayTable() {
+        try {
+            String sql="select * from "+dbTable+";";
+            ps=conn.prepareStatement(sql);
+            ps.clearParameters();
+            rs=ps.executeQuery();
+            while (rs.next()) {
+                int id=rs.getInt(1);
+                String name=rs.getString("name");
+                String data=rs.getString("data");
+                System.out.println(id+"\t\t"+name+"\t\t"+data);
+            }
+        }
+        catch (Exception e) {
+            
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+    }
+    
     public void getTime() {
         Date d = new Date();
         SimpleDateFormat s = new SimpleDateFormat("dd-MMM-yyyy");
@@ -116,29 +262,44 @@ public class MainActivity extends javax.swing.JFrame {
     }
     
     public void getWeatherAPI(String location) {
-        String url = cityCodeAPI+weatherAPIKey+"&q="+location;
-        System.out.println(url);
-        String cityCode=getCityCode(url);
-        url = weatherAPI+cityCode+"?apikey="+weatherAPIKey;
-        System.out.println(url);
         
-        getWeatherData(url);
-        setParentPanelTo(weatherPanelIndex);
+        Thread loadQuery = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String url = cityCodeAPI+weatherAPIKey+"&q="+location;
+                System.out.println(url);
+                String cityCode=getCityCode(url);
+                url = weatherAPI+cityCode+"?apikey="+weatherAPIKey;
+                System.out.println(url);
+
+                getWeatherData(url);
+                setParentPanelTo(weatherPanelIndex);
+            }
+        });
+        loadQuery.start();
         
     }
     
     public void getWikiAPI(String search) {
-        search=search.replaceAll(" ","+");
-        String url = wikipediaURL+search+"&format=json";
-        System.out.println(url);
-        String info = loadWikiData(url);
-        setParentPanelTo(wikiPanelIndex);
-        txtWikiOutput.setText(info);
+        //String str=search;
+        showResponse("Loading data");
+        Thread loader = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String str=search.replaceAll(" ","+");
+                String url = wikipediaURL+str+"&format=json";
+                System.out.println(url);
+                String info = loadWikiData(url);
+                setParentPanelTo(wikiPanelIndex);
+                txtWikiOutput.setText(info);
+            }
+        });
+        loader.start();
     }
     
     public String loadWikiData(String url) {
         try {
-            getResponseString(url);
+            //getResponseString(url);
             String resp = getResponseString(url);
             JSONParser parser = new JSONParser();
             String info = (String)(((JSONArray)(((JSONArray)parser.parse(resp)).get(2))).get(0));
@@ -149,6 +310,46 @@ public class MainActivity extends javax.swing.JFrame {
             e.printStackTrace();
             return null;
         }
+    }
+    
+    
+    public void loadNewsData() {
+        showResponse("Loading news data");
+        Thread loader = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    setParentPanelTo(newsPanelIndex);
+                    String url = newsAPI;
+                    System.out.println(url);
+                    String resp = getResponseString(url);
+                    JSONParser parser = new JSONParser();
+                    JSONObject data = (JSONObject)parser.parse(resp);
+                    int num = (int)((long)(data.get("totalResults")));
+                    headlines=new String[num];
+                    articles=new String[num];
+                    imgURL=new String[num];
+                    JSONArray art = (JSONArray)data.get("articles");
+                    for (int i=0;i<num;i++) {
+                        data = (JSONObject)art.get(i);
+                        headlines[i]=(String)data.get("title");
+                        articles[i]=(String)data.get("description");
+                        imgURL[i]=(String)data.get("urlToImage");
+                    }
+                    newIndex=0;
+                    txtNewsHead.setText(headlines[newIndex]);
+                    txtNewsText.setText(articles[newIndex]);
+                    showResponse(txtNewsHead.getText());
+                }
+                catch (Exception e) {
+                    System.out.println(e);
+                    e.printStackTrace();
+                }
+            }
+        });
+        loader.start();
+        
+        
     }
     
     public void setParentPanelTo(int panelIndex) {
@@ -252,19 +453,27 @@ public class MainActivity extends javax.swing.JFrame {
     }
     
     public void setWeatherIcon(JLabel label,String index) {
-        try {
-            BufferedImage brImg = ImageIO.read(new URL(weatherIconURL+index+"-s.png"));
-            int w=150,h=90;
-            BufferedImage resizedImg = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g2 = resizedImg.createGraphics();
-            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            g2.drawImage(brImg, 0, 0, w, h, null);
-            g2.dispose();
-            label.setIcon(new ImageIcon(resizedImg)); 
-        }
-        catch (Exception e) {
-            
-        }
+        
+        Thread loader = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    BufferedImage brImg = ImageIO.read(new URL(weatherIconURL+index+"-s.png"));
+                    int w=150,h=90;
+                    BufferedImage resizedImg = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D g2 = resizedImg.createGraphics();
+                    g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g2.drawImage(brImg, 0, 0, w, h, null);
+                    g2.dispose();
+                    label.setIcon(new ImageIcon(resizedImg)); 
+                }
+                catch (Exception e) {
+
+                }
+            }
+        });
+        loader.start();
+        
     }
     
     /**
@@ -305,7 +514,23 @@ public class MainActivity extends javax.swing.JFrame {
         hourPicker = new javax.swing.JSpinner();
         minPicker = new javax.swing.JSpinner();
         txtRemMsg = new javax.swing.JTextField();
-        jLabel1 = new javax.swing.JLabel();
+        notesPanel = new javax.swing.JPanel();
+        jScrollPane3 = new javax.swing.JScrollPane();
+        txtNoteText = new javax.swing.JTextArea();
+        txtNoteFileName = new javax.swing.JTextField();
+        btnNoteSave = new javax.swing.JButton();
+        btnNoteCancel = new javax.swing.JButton();
+        btnNoteOpen = new javax.swing.JButton();
+        btnNoteShow = new javax.swing.JButton();
+        newsPanel = new javax.swing.JPanel();
+        jScrollPane4 = new javax.swing.JScrollPane();
+        txtNewsText = new javax.swing.JTextArea();
+        btnNewsNext = new javax.swing.JLabel();
+        btnNewsPrev = new javax.swing.JLabel();
+        jScrollPane5 = new javax.swing.JScrollPane();
+        txtNewsHead = new javax.swing.JTextArea();
+        btnNewsClose = new javax.swing.JLabel();
+        btnSpeak = new javax.swing.JLabel();
         jButton1 = new javax.swing.JButton();
         txtOutput = new javax.swing.JTextField();
         txtInput = new javax.swing.JTextField();
@@ -339,14 +564,14 @@ public class MainActivity extends javax.swing.JFrame {
         weatherPanel.setBackground(new java.awt.Color(51, 51, 51));
 
         dayIcon.setFont(new java.awt.Font("Dialog", 0, 18)); // NOI18N
-        dayIcon.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/mic-icon.png"))); // NOI18N
+        dayIcon.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/nothing_to_show.png"))); // NOI18N
 
         nightIcon.setFont(new java.awt.Font("Dialog", 0, 18)); // NOI18N
-        nightIcon.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/mic-icon.png"))); // NOI18N
+        nightIcon.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/nothing_to_show.png"))); // NOI18N
 
-        txtWeatherInfo.setFont(new java.awt.Font("Tahoma", 0, 40)); // NOI18N
+        txtWeatherInfo.setFont(new java.awt.Font("Tahoma", 0, 37)); // NOI18N
         txtWeatherInfo.setForeground(new java.awt.Color(255, 255, 255));
-        txtWeatherInfo.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        txtWeatherInfo.setHorizontalAlignment(javax.swing.SwingConstants.LEFT);
         txtWeatherInfo.setText("Clear Sky");
 
         txtMinTemp.setFont(new java.awt.Font("Agency FB", 0, 70)); // NOI18N
@@ -376,44 +601,47 @@ public class MainActivity extends javax.swing.JFrame {
             .addGroup(weatherPanelLayout.createSequentialGroup()
                 .addContainerGap()
                 .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                    .addComponent(dayIcon)
-                    .addComponent(nightIcon))
-                .addGap(75, 75, 75)
-                .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                    .addComponent(txtWeatherInfo, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                     .addGroup(weatherPanelLayout.createSequentialGroup()
-                        .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING, false)
-                            .addComponent(txtDayPhrase, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                            .addComponent(txtMaxTemp, javax.swing.GroupLayout.PREFERRED_SIZE, 178, javax.swing.GroupLayout.PREFERRED_SIZE))
-                        .addGap(18, 18, 18)
+                        .addComponent(txtWeatherInfo, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                        .addContainerGap())
+                    .addGroup(weatherPanelLayout.createSequentialGroup()
                         .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                            .addComponent(txtMinTemp, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                            .addComponent(txtNightPhrase, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))))
-                .addGap(610, 610, 610))
+                            .addComponent(dayIcon)
+                            .addComponent(nightIcon))
+                        .addGap(21, 21, 21)
+                        .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                            .addGroup(weatherPanelLayout.createSequentialGroup()
+                                .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                                    .addGroup(weatherPanelLayout.createSequentialGroup()
+                                        .addGap(218, 218, 218)
+                                        .addComponent(txtNightPhrase, javax.swing.GroupLayout.PREFERRED_SIZE, 289, javax.swing.GroupLayout.PREFERRED_SIZE))
+                                    .addGroup(weatherPanelLayout.createSequentialGroup()
+                                        .addGap(4, 4, 4)
+                                        .addComponent(txtMaxTemp, javax.swing.GroupLayout.PREFERRED_SIZE, 193, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                                        .addComponent(txtDayPhrase, javax.swing.GroupLayout.PREFERRED_SIZE, 289, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                                .addContainerGap(40, Short.MAX_VALUE))
+                            .addGroup(weatherPanelLayout.createSequentialGroup()
+                                .addComponent(txtMinTemp, javax.swing.GroupLayout.PREFERRED_SIZE, 193, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                .addContainerGap())))))
         );
         weatherPanelLayout.setVerticalGroup(
             weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(weatherPanelLayout.createSequentialGroup()
                 .addContainerGap()
+                .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                    .addComponent(txtMaxTemp)
+                    .addComponent(dayIcon)
+                    .addComponent(txtDayPhrase))
+                .addGap(18, 18, 18)
                 .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, weatherPanelLayout.createSequentialGroup()
-                        .addGap(113, 113, 113)
-                        .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
-                            .addComponent(txtDayPhrase)
-                            .addComponent(txtNightPhrase))
-                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, 73, Short.MAX_VALUE)
-                        .addComponent(txtWeatherInfo)
-                        .addGap(31, 31, 31))
-                    .addGroup(weatherPanelLayout.createSequentialGroup()
-                        .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                            .addGroup(weatherPanelLayout.createSequentialGroup()
-                                .addComponent(dayIcon)
-                                .addGap(102, 102, 102)
-                                .addComponent(nightIcon))
-                            .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
-                                .addComponent(txtMaxTemp)
-                                .addComponent(txtMinTemp)))
-                        .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))))
+                    .addGroup(weatherPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                        .addComponent(txtMinTemp)
+                        .addComponent(txtNightPhrase))
+                    .addComponent(nightIcon))
+                .addGap(18, 18, 18)
+                .addComponent(txtWeatherInfo)
+                .addContainerGap(36, Short.MAX_VALUE))
         );
 
         parentPanel.add(weatherPanel, "card2");
@@ -499,10 +727,11 @@ public class MainActivity extends javax.swing.JFrame {
             emailPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(emailPanelLayout.createSequentialGroup()
                 .addGroup(emailPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
-                    .addGroup(emailPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
-                        .addComponent(txtEmailTo, javax.swing.GroupLayout.PREFERRED_SIZE, 30, javax.swing.GroupLayout.PREFERRED_SIZE)
-                        .addComponent(btnSendEmail, javax.swing.GroupLayout.PREFERRED_SIZE, 30, javax.swing.GroupLayout.PREFERRED_SIZE)
-                        .addComponent(btnEmailClose))
+                    .addGroup(emailPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                        .addComponent(btnEmailClose, javax.swing.GroupLayout.Alignment.TRAILING)
+                        .addGroup(emailPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(txtEmailTo, javax.swing.GroupLayout.PREFERRED_SIZE, 30, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(btnSendEmail, javax.swing.GroupLayout.PREFERRED_SIZE, 30, javax.swing.GroupLayout.PREFERRED_SIZE)))
                     .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 61, javax.swing.GroupLayout.PREFERRED_SIZE))
                 .addGap(18, 18, 18)
                 .addComponent(jScrollPane2, javax.swing.GroupLayout.DEFAULT_SIZE, 218, Short.MAX_VALUE)
@@ -599,10 +828,163 @@ public class MainActivity extends javax.swing.JFrame {
 
         parentPanel.add(reminderPanel, "card6");
 
+        txtNoteText.setColumns(20);
+        txtNoteText.setFont(new java.awt.Font("Monospaced", 0, 17)); // NOI18N
+        txtNoteText.setRows(5);
+        jScrollPane3.setViewportView(txtNoteText);
+
+        txtNoteFileName.setFont(new java.awt.Font("Tahoma", 0, 15)); // NOI18N
+
+        btnNoteSave.setText("Save");
+        btnNoteSave.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                btnNoteSaveActionPerformed(evt);
+            }
+        });
+
+        btnNoteCancel.setText("Cancel");
+        btnNoteCancel.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                btnNoteCancelActionPerformed(evt);
+            }
+        });
+
+        btnNoteOpen.setText("Open");
+        btnNoteOpen.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                btnNoteOpenActionPerformed(evt);
+            }
+        });
+
+        btnNoteShow.setText("Show");
+        btnNoteShow.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                btnNoteShowActionPerformed(evt);
+            }
+        });
+
+        javax.swing.GroupLayout notesPanelLayout = new javax.swing.GroupLayout(notesPanel);
+        notesPanel.setLayout(notesPanelLayout);
+        notesPanelLayout.setHorizontalGroup(
+            notesPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(notesPanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addGroup(notesPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addComponent(jScrollPane3)
+                    .addGroup(notesPanelLayout.createSequentialGroup()
+                        .addComponent(txtNoteFileName, javax.swing.GroupLayout.DEFAULT_SIZE, 355, Short.MAX_VALUE)
+                        .addGap(18, 18, 18)
+                        .addComponent(btnNoteShow)
+                        .addGap(18, 18, 18)
+                        .addComponent(btnNoteOpen, javax.swing.GroupLayout.PREFERRED_SIZE, 77, javax.swing.GroupLayout.PREFERRED_SIZE)
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                        .addComponent(btnNoteCancel, javax.swing.GroupLayout.PREFERRED_SIZE, 77, javax.swing.GroupLayout.PREFERRED_SIZE)
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                        .addComponent(btnNoteSave, javax.swing.GroupLayout.PREFERRED_SIZE, 77, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                .addContainerGap())
+        );
+        notesPanelLayout.setVerticalGroup(
+            notesPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, notesPanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addGroup(notesPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING, false)
+                    .addComponent(txtNoteFileName, javax.swing.GroupLayout.DEFAULT_SIZE, 38, Short.MAX_VALUE)
+                    .addComponent(btnNoteCancel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                    .addComponent(btnNoteSave, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                    .addComponent(btnNoteShow, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                    .addComponent(btnNoteOpen, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addComponent(jScrollPane3, javax.swing.GroupLayout.PREFERRED_SIZE, 239, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addContainerGap())
+        );
+
+        parentPanel.add(notesPanel, "card7");
+
+        newsPanel.setBackground(new java.awt.Color(51, 51, 51));
+
+        txtNewsText.setEditable(false);
+        txtNewsText.setColumns(20);
+        txtNewsText.setFont(new java.awt.Font("Monospaced", 0, 15)); // NOI18N
+        txtNewsText.setLineWrap(true);
+        txtNewsText.setRows(5);
+        jScrollPane4.setViewportView(txtNewsText);
+
+        btnNewsNext.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/next.png"))); // NOI18N
+        btnNewsNext.addMouseListener(new java.awt.event.MouseAdapter() {
+            public void mouseClicked(java.awt.event.MouseEvent evt) {
+                btnNewsNextMouseClicked(evt);
+            }
+        });
+
+        btnNewsPrev.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/prev.png"))); // NOI18N
+        btnNewsPrev.addMouseListener(new java.awt.event.MouseAdapter() {
+            public void mouseClicked(java.awt.event.MouseEvent evt) {
+                btnNewsPrevMouseClicked(evt);
+            }
+        });
+
+        txtNewsHead.setEditable(false);
+        txtNewsHead.setColumns(20);
+        txtNewsHead.setFont(new java.awt.Font("Monospaced", 0, 17)); // NOI18N
+        txtNewsHead.setLineWrap(true);
+        txtNewsHead.setRows(5);
+        jScrollPane5.setViewportView(txtNewsHead);
+
+        btnNewsClose.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/close.png"))); // NOI18N
+        btnNewsClose.addMouseListener(new java.awt.event.MouseAdapter() {
+            public void mouseClicked(java.awt.event.MouseEvent evt) {
+                btnNewsCloseMouseClicked(evt);
+            }
+        });
+
+        javax.swing.GroupLayout newsPanelLayout = new javax.swing.GroupLayout(newsPanel);
+        newsPanel.setLayout(newsPanelLayout);
+        newsPanelLayout.setHorizontalGroup(
+            newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(newsPanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addGroup(newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addComponent(jScrollPane5)
+                    .addGroup(newsPanelLayout.createSequentialGroup()
+                        .addComponent(btnNewsPrev)
+                        .addGap(18, 18, 18)
+                        .addComponent(jScrollPane4, javax.swing.GroupLayout.DEFAULT_SIZE, 542, Short.MAX_VALUE)
+                        .addGap(18, 18, 18)
+                        .addGroup(newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                            .addComponent(btnNewsNext)
+                            .addComponent(btnNewsClose, javax.swing.GroupLayout.Alignment.TRAILING))))
+                .addContainerGap())
+        );
+        newsPanelLayout.setVerticalGroup(
+            newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(newsPanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addComponent(jScrollPane5, javax.swing.GroupLayout.PREFERRED_SIZE, 63, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addGroup(newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(newsPanelLayout.createSequentialGroup()
+                        .addGap(18, 18, 18)
+                        .addComponent(jScrollPane4))
+                    .addGroup(newsPanelLayout.createSequentialGroup()
+                        .addGap(56, 56, 56)
+                        .addGroup(newsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                            .addComponent(btnNewsNext)
+                            .addComponent(btnNewsPrev))
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, 69, Short.MAX_VALUE)
+                        .addComponent(btnNewsClose)))
+                .addContainerGap())
+        );
+
+        parentPanel.add(newsPanel, "card8");
+
         getContentPane().add(parentPanel, new org.netbeans.lib.awtextra.AbsoluteConstraints(30, 210, 730, 310));
 
-        jLabel1.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/mic-icon.png"))); // NOI18N
-        getContentPane().add(jLabel1, new org.netbeans.lib.awtextra.AbsoluteConstraints(660, 540, -1, -1));
+        btnSpeak.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/mic-icon.png"))); // NOI18N
+        btnSpeak.addMouseListener(new java.awt.event.MouseAdapter() {
+            public void mouseClicked(java.awt.event.MouseEvent evt) {
+                btnSpeakMouseClicked(evt);
+            }
+        });
+        getContentPane().add(btnSpeak, new org.netbeans.lib.awtextra.AbsoluteConstraints(660, 540, -1, -1));
 
         jButton1.setIcon(new javax.swing.ImageIcon(getClass().getResource("/images/mic-icon.png"))); // NOI18N
         jButton1.setOpaque(false);
@@ -755,10 +1137,12 @@ public class MainActivity extends javax.swing.JFrame {
         txtEmailText.setText("");
         txtEmailTo.setText("");
         setParentPanelTo(blankPanelIndex);
+        txtOutput.setText("");
     }//GEN-LAST:event_btnEmailCloseMouseClicked
 
     private void btnRemCloseMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_btnRemCloseMouseClicked
         setParentPanelTo(blankPanelIndex);
+        txtOutput.setText("");
     }//GEN-LAST:event_btnRemCloseMouseClicked
 
     private void btnRemSetActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnRemSetActionPerformed
@@ -795,6 +1179,281 @@ public class MainActivity extends javax.swing.JFrame {
         window.startTimer();
     }//GEN-LAST:event_btnRemSetActionPerformed
 
+    private void btnNoteCancelActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnNoteCancelActionPerformed
+        txtNoteFileName.setText("");
+        txtNoteText.setText("");
+        showResponse("Note not saved");
+        setParentPanelTo(blankPanelIndex);
+    }//GEN-LAST:event_btnNoteCancelActionPerformed
+
+    private void btnNoteSaveActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnNoteSaveActionPerformed
+        String data = txtNoteText.getText();
+        String file = txtNoteFileName.getText();
+        showResponse("Saving note");
+        int id = maxEntry()+1;
+        
+        if (file.equals("")) {
+            file="untitled-"+id;
+        }
+        
+        try {
+            String sql="insert into "+dbTable+" values(?,?,?)";
+            ps=conn.prepareStatement(sql);
+            ps.setInt(1,id);
+            ps.setString(2,file);
+            ps.setString(3,data);
+            ps.executeUpdate();
+            displayTable();
+        }
+        catch (Exception e) {
+            System.out.println("Failed");
+            System.out.println(e);
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+        
+    }//GEN-LAST:event_btnNoteSaveActionPerformed
+
+    private void btnNoteOpenActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnNoteOpenActionPerformed
+        String data=openDBFile();
+        txtNoteText.setText(data);
+        showResponse("Opening note");
+    }//GEN-LAST:event_btnNoteOpenActionPerformed
+
+    private void btnNoteShowActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnNoteShowActionPerformed
+        txtNoteText.setText("");
+        showResponse("Showing list of all notes");
+        try {
+            String sql="select * from "+dbTable+";";
+            ps=conn.prepareStatement(sql);
+            ps.clearParameters();
+            rs=ps.executeQuery();
+            while (rs.next()) {
+                String name=rs.getString("name");
+                System.out.println(name);
+                txtNoteText.append(name+"\n");
+            }
+        }
+        catch (Exception e) {
+            
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+    }//GEN-LAST:event_btnNoteShowActionPerformed
+
+    private void btnNewsNextMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_btnNewsNextMouseClicked
+        newIndex = (newIndex+1)%articles.length;
+        txtNewsHead.setText(headlines[newIndex]);
+        txtNewsText.setText(articles[newIndex]);
+        showResponse(txtNewsHead.getText());
+    }//GEN-LAST:event_btnNewsNextMouseClicked
+
+    private void btnNewsPrevMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_btnNewsPrevMouseClicked
+        newIndex = (newIndex-1+articles.length)%articles.length;
+        txtNewsHead.setText(headlines[newIndex]);
+        txtNewsText.setText(articles[newIndex]);
+    }//GEN-LAST:event_btnNewsPrevMouseClicked
+
+    private void btnNewsCloseMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_btnNewsCloseMouseClicked
+        setParentPanelTo(blankPanelIndex);
+        txtOutput.setText("");
+    }//GEN-LAST:event_btnNewsCloseMouseClicked
+
+    private void btnSpeakMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_btnSpeakMouseClicked
+        if (!isListening) {
+            isListening=true;
+            Thread listening = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    micCommand();
+                    //voiceRecog.interpret();
+                    isListening=false;
+                }
+            });
+            listening.start();
+        }
+    }//GEN-LAST:event_btnSpeakMouseClicked
+
+    public void micCommand() {
+        Thread compileRun = new Thread(new Runnable(){
+            @Override
+            public void run() {
+                //inFile=filePath.substring(filePath.lastIndexOf('\\')+1);
+                //outFile=inFile.substring(0,inFile.lastIndexOf('.'));
+                //fileDir=filePath.substring(0,filePath.lastIndexOf('\\'));
+                //String ext=filePath.substring(filePath.lastIndexOf('.'));
+                //pb = new ProcessBuilder("cmd", "/C", "g++ " + "\"" + filepath2 + "\\" + name + "\"" + " -o \"" + name2+"\"");
+                try {
+                    //ProcessBuilder pb = new ProcessBuilder("cmd", "/C", outFile);
+                    ProcessBuilder pb;
+                    pb = new ProcessBuilder("cmd","/c","java "+javaFile);
+                        //fileDir="C:\\Program Files\\Java\\jdk1.8.0_111\\bin";
+                    pb.directory(new File(javaFileDir));
+                    Process p = pb.start();
+                    BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                    //PrintWriter pw = new PrintWriter(p.getOutputStream());
+                    //String inp=txtInput.getText()+"\n";
+                    
+                    //byte buffer[] = inp.getBytes();//new byte[100];
+                    //buffer=new String("5\n").getBytes();
+                    //OutputStream os =(p.getOutputStream());
+                    //os.write(buffer,0,buffer.length);
+                    //os.flush();
+                    
+                    String str;
+                    //textDebug.setText("");
+                    long t1=System.currentTimeMillis();
+                    while ((str=br.readLine())!=null) {
+                        System.out.println(str);
+                        //textDebug.append(str+"\n");
+                        //if (terminate) {
+                           // break;
+                        //}
+                        try {
+                            ;//Thread.sleep(10);
+                        } catch (Exception e) {
+                            ;
+                        }
+                    }
+                    long t2=System.currentTimeMillis();
+                    //System.out.println("show");
+                    //textDebug.append("\nRun completed !\n");
+                    //textDebug.append("Elapsed Time : "+((t2-t1)/1000.0)+" sec\n");
+                    //terminate=false;
+                    //System.out.println("");
+                    //textDebug.setText("");
+                    p.waitFor();
+                    int x = p.exitValue();
+                    if (x == 0) {
+                        ;//JOptionPane.showMessageDialog(null,"Run Completed !");
+                        System.out.println("java mic code run complete");
+                    }
+                    else
+                    {
+                        System.out.println("Displaying something");
+                        BufferedReader r = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+                        String out;
+                        while ((out = r.readLine()) != null)
+                        {
+                            String msg=out + System.getProperty("line.separator");
+                            System.out.println(msg);
+                            System.out.println("Compiler : "+out);
+                            //textDebug.append(out+"\n");
+                        }
+                    }
+                }
+                catch (Exception e) {
+                    System.out.println("Error ");
+                }
+            }
+        });
+        compileRun.start();
+    }
+    
+    public String openDBFile() {
+        String sql="select * from "+dbTable+" where name=?";
+        try {
+            ps=conn.prepareStatement(sql);
+            ps.setString(1,txtNoteFileName.getText());
+            rs=ps.executeQuery();
+            if (rs.next()) {
+                int tmp=rs.getInt("id");
+                String data = rs.getString("data");
+                rs.close();
+                ps.close();
+                return data;
+            }
+            else {
+                showResponse("Sorry I could not find your file");
+                System.out.println("file not found");
+            }
+        }
+        catch (Exception e) {
+            showResponse("Sorry I could not find your file");
+            System.out.println("file Not found");
+            System.out.println(e);
+            e.printStackTrace();
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+        return "";
+    }
+    
+    public int countEntry() {
+        try {
+            String sql="select count(*) from "+dbTable+";";
+            ps=conn.prepareStatement(sql);
+            rs=ps.executeQuery();
+            int n=0;
+            if (rs.next()) {
+                n=rs.getInt(1);
+            }
+            System.out.println("size : "+n);
+            return n;
+        }
+        catch (Exception e) {
+            System.out.println(e);
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+        return 0;
+    }
+    
+    public int maxEntry() {
+        try {
+            String sql="select max(id) from "+dbTable+";";
+            ps=conn.prepareStatement(sql);
+            rs=ps.executeQuery();
+            int n=0;
+            if (rs.next()) {
+                n=rs.getInt(1);
+            }
+            System.out.println("size : "+n);
+            return n;
+        }
+        catch (Exception e) {
+            System.out.println(e);
+        }
+        finally {
+            try {
+                rs.close();
+                ps.close();
+            }
+            catch (Exception e) {
+                
+            }
+        }
+        return 0;
+    }
+    
     private void closeApp() {
         runPython("shutdown");
         System.exit(0);
@@ -804,11 +1463,13 @@ public class MainActivity extends javax.swing.JFrame {
         System.out.println("=>"+command);
         //String tmpCom=command;
         
-        
         if (currMode==defaultMode) {
+            setParentPanelTo(blankPanelIndex);
+            txtOutput.setText("");
             command=command.toLowerCase();
             if (command.contains("open")) {
                 try {
+                    showResponse("Opening Application");
                     String app = command.substring(command.indexOf("open")+5);
                     ProcessBuilder pb;
                     pb = new ProcessBuilder (app);
@@ -819,11 +1480,13 @@ public class MainActivity extends javax.swing.JFrame {
                 }
             }
             else if (command.contains("email")) {
+                showResponse("Opening Application");
                 currMode=emailMode;
                 setParentPanelTo(emailPanelIndex);
             }
             else if (command.contains("weather")) {
                 //currMode=weatherMode;
+                showResponse("Loading weather data");
                 getWeatherAPI("allahabad");
             }
             else if (command.contains("search")) {
@@ -840,9 +1503,15 @@ public class MainActivity extends javax.swing.JFrame {
                 setParentPanelTo(reminderPanelIndex);
                 
             }
+            else if (command.contains("note")) {
+                showResponse("Making note for you");
+                setParentPanelTo(notesPanelIndex);
+            }
+            else if (command.contains("news")||command.contains("headlines")) {
+                loadNewsData();
+            }
             else {
                 runPython(command);
-                //getWikiAPI(command);
             }
         }
         else if (currMode==emailMode) {
@@ -869,6 +1538,14 @@ public class MainActivity extends javax.swing.JFrame {
             return;
         }
         txtOutput.setText(data);
+        Thread speak = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                botVoice.sayWords(data);
+            }
+        });
+        speak.start();
+        
     }
     
     public void initPython() {
@@ -924,168 +1601,97 @@ public class MainActivity extends javax.swing.JFrame {
     }
     
     public void runPython(String msg) {
-        long t1=System.currentTimeMillis();
+        txtOutput.setText(" < Thinking > ");
+        Thread loader = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                long t1=System.currentTimeMillis();
+                try {
+                    String inp=msg+"\n";
+                    byte buffer[] = inp.getBytes();
+                    OutputStream os =(pro.getOutputStream());
+                    os.write(buffer,0,buffer.length);
+                    os.flush();
+
+                    Thread output = new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                ProcessBuilder pblocal;
+                                pblocal = new ProcessBuilder ("cmd","/C","python "+fileDir+"\\"+getReplyPy);
+                                pblocal.directory(new File(path));
+                                Process plocal = pblocal.start();
+                                BufferedReader brlocal = new BufferedReader(new InputStreamReader(plocal.getInputStream()));
+                                String out="";
+                                while ((out=brlocal.readLine())!=null) {
+                                    System.out.println(getReplyPy+" "+out);
+                                    if (out.equals("failed to load results")) {
+                                        txtOutput.setText("Loading better results from wikipedia");
+                                        System.out.println("loading results from wiki");
+                                        getWikiAPI(msg);
+                                    }
+                                    else {
+                                        showResponse(out);
+                                    }
+                                }
+                                plocal.waitFor();
+                            }
+                            catch (Exception e) {
+                                System.out.println(e);
+                                e.printStackTrace();
+                            }
+
+                        }
+                    });
+                    output.start();
+                }
+                catch (Exception e) {
+                    System.out.println("Error in running");
+                }
+            }
+        });
+        loader.start();
+    }
+    
+    public String getChatBotResponse(String msg) {
+        //txtOutput.setText(" < Thinking > ");
+        //long t1=System.currentTimeMillis();
         try {
+            System.out.println("Data received : "+msg);
             String inp=msg+"\n";
             byte buffer[] = inp.getBytes();
             OutputStream os =(pro.getOutputStream());
             os.write(buffer,0,buffer.length);
             os.flush();
-            
-            Thread output = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        ProcessBuilder pblocal;
-                        pblocal = new ProcessBuilder ("cmd","/C","python "+fileDir+"\\"+getReplyPy);
-                        pblocal.directory(new File(path));
-                        Process plocal = pblocal.start();
-                        BufferedReader brlocal = new BufferedReader(new InputStreamReader(plocal.getInputStream()));
-                        String out="";
-                        while ((out=brlocal.readLine())!=null) {
-                            System.out.println(getReplyPy+" "+out);
-                            showResponse(out);
-                        }
-                        plocal.waitFor();
-                    }
-                    catch (Exception e) {
-                        System.out.println(e);
-                        e.printStackTrace();
-                    }
-                    
+
+            try {
+                ProcessBuilder pblocal;
+                pblocal = new ProcessBuilder ("cmd","/C","python "+fileDir+"\\"+getReplyPy);
+                pblocal.directory(new File(path));
+                Process plocal = pblocal.start();
+                BufferedReader brlocal = new BufferedReader(new InputStreamReader(plocal.getInputStream()));
+                String out="";
+                String data="";
+                while ((out=brlocal.readLine())!=null) {
+                    System.out.println(getReplyPy+" "+out);
+                    data=data+out+"\n";
                 }
-            });
-            output.start();
+                plocal.waitFor();
+                socketData=data;
+            }
+            catch (Exception e) {
+                System.out.println(e);
+                e.printStackTrace();
+            }
+            return socketData;
         }
         catch (Exception e) {
             System.out.println("Error in running");
+            return null;
         }
     }
     
-    
-    
-//    
-//    public void compilePython(String msg) {
-//        long t1=System.currentTimeMillis();
-//        String file = pythonFile;
-//        try {
-//            ProcessBuilder pb;
-//            pb = new ProcessBuilder ("cmd","/C","python "+fileDir+"\\"+file);
-//            pb.directory(new File(path));
-//            System.out.println("started");
-//            Process p = pb.start();
-//            
-//            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-//            String inp=msg+"\n";
-//            byte buffer[] = inp.getBytes();
-//            OutputStream os =(p.getOutputStream());
-//            os.write(buffer,0,buffer.length);
-//            os.flush();
-//            
-//            String out="";
-//            System.out.println(br.readLine());
-//            System.out.println("ended");
-//            while ((out=br.readLine())!=null) {
-//                System.out.println(out);
-//            }
-//            long t2=System.currentTimeMillis();
-//            System.out.println("Compilation Time : "+((t2-t1)/1000.0)+" sec\n");
-//            
-//            p.waitFor();
-//            int x = p.exitValue();
-//            if (x == 0) {
-//                ;//System.out.println("done successful");
-//            }
-//            else
-//            {
-//                ;//System.out.println("done with error");
-//            }
-//        }
-//        catch (Exception e) {
-//            System.out.println("Error in running");
-//        }
-//    }
-//    
-//    public void runPython() {
-//        long t1=System.currentTimeMillis();
-//        String file = pythonFile;
-//        String fileDir = "C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot";
-//        String path = "C:\\Python27";
-//        try {
-//            ProcessBuilder pb;
-//            pb = new ProcessBuilder ("cmd","/C","python "+fileDir+"\\"+file);
-//            pb.directory(new File(path));
-//            Process p = pb.start();
-//            p.waitFor();
-//            int x = p.exitValue();
-//            if (x == 0) {
-//                BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-//                String out="";
-//                while ((out=br.readLine())!=null) {
-//                    System.out.println(out);
-//                }
-//                long t2=System.currentTimeMillis();
-//                System.out.println("Compilation Time : "+((t2-t1)/1000.0)+" sec\n");
-//            }
-//            else
-//            {
-//                BufferedReader r = new BufferedReader(new InputStreamReader(p.getErrorStream()));
-//                String out;
-//                while ((out = r.readLine()) != null)
-//                {
-//                    String msg=out + System.getProperty("line.separator");
-//                    System.out.println(msg);
-//                    System.out.println("Compiler : "+out);
-//                    System.out.println(out+"\n");
-//                }
-//                long t2=System.currentTimeMillis();
-//                System.out.println("Compilation Time : "+((t2-t1)/1000.0)+" sec\n");
-//            }
-//        }
-//        catch (Exception e) {
-//            System.out.println("Error ");
-//        }
-//    }
-//    
-//    public void getWeather() {
-//        // find woeid from this link
-//        // http://woeid.rosselliot.co.nz/lookup/city
-//        
-//        WeatherDoc doc = new WeatherDoc("1580913","c");
-//        WeatherDisplay disp = new WeatherDisplay();
-//        //disp=doc.
-//        System.out.println(disp.getTemperature());
-//    }
-//    
-//    public void searchQuery() {
-//        try {
-//            String google = "http://ajax.googleapis.com/ajax/services/search/web?v=1.0&q=";
-//            String search = "stackoverflow";
-//            String charset = "UTF-8";
-//
-//            URL url = new URL(google + URLEncoder.encode(search, charset));
-//            Reader reader = new InputStreamReader(url.openStream(), charset);
-//            System.out.println(reader);
-//            BufferedReader br = new BufferedReader(reader);
-//            System.out.println(br);
-//            String data=br.readLine();
-//            System.out.println(data);
-////            while ((data=br.readLine())!=null) {
-////                System.out.println(data);
-////            }
-//            //GoogleResults results = new Gson().fromJson(reader, GoogleResults.class);
-//
-//            // Show title and URL of 1st result.
-//            //System.out.println(results.getResponseData().getResults().get(0).getTitle());
-//            //System.out.println(results.getResponseData().getResults().get(0).getUrl());
-//        }
-//        catch (Exception e) {
-//            System.out.println("error");
-//            System.out.println(e);
-//            e.printStackTrace();
-//        }
-//    }
-    
+
     public void exec(String command) {
         Runtime runtime = Runtime.getRuntime(); 
         try {
@@ -1150,23 +1756,35 @@ public class MainActivity extends javax.swing.JFrame {
     private javax.swing.JPanel blankPanel;
     private javax.swing.JLabel btnClose;
     private javax.swing.JLabel btnEmailClose;
+    private javax.swing.JLabel btnNewsClose;
+    private javax.swing.JLabel btnNewsNext;
+    private javax.swing.JLabel btnNewsPrev;
+    private javax.swing.JButton btnNoteCancel;
+    private javax.swing.JButton btnNoteOpen;
+    private javax.swing.JButton btnNoteSave;
+    private javax.swing.JButton btnNoteShow;
     private javax.swing.JLabel btnRemClose;
     private javax.swing.JButton btnRemSet;
     private javax.swing.JButton btnSendEmail;
+    private javax.swing.JLabel btnSpeak;
     private com.toedter.calendar.JDateChooser datePicker;
     private javax.swing.JLabel dayIcon;
     private javax.swing.JPanel emailPanel;
     private javax.swing.JSpinner hourPicker;
     private javax.swing.JButton jButton1;
     private com.toedter.calendar.JCalendar jCalendar1;
-    private javax.swing.JLabel jLabel1;
     private javax.swing.JLabel jLabel2;
     private javax.swing.JLabel jLabel3;
     private javax.swing.JLabel jLabel4;
     private javax.swing.JScrollPane jScrollPane1;
     private javax.swing.JScrollPane jScrollPane2;
+    private javax.swing.JScrollPane jScrollPane3;
+    private javax.swing.JScrollPane jScrollPane4;
+    private javax.swing.JScrollPane jScrollPane5;
     private javax.swing.JSpinner minPicker;
+    private javax.swing.JPanel newsPanel;
     private javax.swing.JLabel nightIcon;
+    private javax.swing.JPanel notesPanel;
     private javax.swing.JPanel parentPanel;
     private javax.swing.JPanel reminderPanel;
     private javax.swing.JLabel titleBar;
@@ -1176,7 +1794,11 @@ public class MainActivity extends javax.swing.JFrame {
     private javax.swing.JTextField txtInput;
     private javax.swing.JLabel txtMaxTemp;
     private javax.swing.JLabel txtMinTemp;
+    private javax.swing.JTextArea txtNewsHead;
+    private javax.swing.JTextArea txtNewsText;
     private javax.swing.JLabel txtNightPhrase;
+    private javax.swing.JTextField txtNoteFileName;
+    private javax.swing.JTextArea txtNoteText;
     private javax.swing.JTextField txtOutput;
     private javax.swing.JTextField txtRemMsg;
     private javax.swing.JLabel txtWeatherInfo;
@@ -1209,5 +1831,4 @@ class GoogleResults {
         public void setTitle(String title) { this.title = title; }
         public String toString() { return "Result[url:" + url +",title:" + title + "]"; }
     }
-
 }

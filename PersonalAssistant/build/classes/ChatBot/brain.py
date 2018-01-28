@@ -55,8 +55,8 @@ with open('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\s
         joke= row[1:]
         jokes.append(joke)
 
-for _file in os.listdir('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\files'):
-    chats=open('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\files\\'+_file , 'r').readlines()
+for _file in os.listdir('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\LeDs'):
+    chats=open('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\LeDs\\'+_file , 'r').readlines()
     bot.train(chats)
 
 j=0

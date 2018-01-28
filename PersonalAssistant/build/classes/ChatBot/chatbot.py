@@ -48,15 +48,15 @@ timebot = ChatBot(
 
 #dataset = pd.read_csv('shortjokes.csv')
 #y=dataset.iloc[:,2:].values
-with open('shortjokes.csv') as csvfile:
+with open('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\shortjokes.csv') as csvfile:
     readCSV=csv.reader(csvfile,delimiter=',')
     jokes=[]
     for row in readCSV:
         joke= row[1:]
         jokes.append(joke)
 
-for _file in os.listdir('files'):
-    chats=open('files/'+_file , 'r').readlines()
+for _file in os.listdir('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\LeDs'):
+    chats=open('C:\\Users\\Shreyas\\Documents\\NetBeansProjects\\PersonalAssistant\\src\\ChatBot\\LeDs\\'+_file , 'r').readlines()
     bot.train(chats)
 
 j=0
